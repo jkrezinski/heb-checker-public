@@ -1,0 +1,1 @@
+java -jar target/heb-alert-1.0-SNAPSHOT.jar
