@@ -9,8 +9,9 @@ import java.util.List;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class Response {
+public class StoreLookupRequest {
 
-    private Store pickupStore;
-    private List<Object> items;
+    private String address;
+    private Boolean curbsideOnly;
+    private Integer radius;
 }
