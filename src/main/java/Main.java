@@ -1,16 +1,18 @@
 import api.Pair;
-import com.amazonaws.ClientConfiguration;
+import api.StoreDistance;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.sns.AmazonSNS;
 import com.amazonaws.services.sns.AmazonSNSClient;
 import com.amazonaws.services.sns.model.PublishRequest;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import heb.Response;
+import heb.PickupFulfillmentResponse;
 import heb.Store;
+import heb.StoreLookupRequest;
+import heb.StoreLookupResponse;
+import lombok.SneakyThrows;
 
 import java.io.IOException;
 import java.net.URI;
@@ -20,7 +22,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +39,9 @@ public class Main {
     private final HttpClient httpClient;
     private final AmazonSNS amazonSNSClient;
 
+    private final String ZIP = "PUT_YOUR_ZIP_CODE_HERE";
+    private final Integer SEARCH_RADIUS_MILES = 10;
+
     private final String KEY = "PUT_YOUR_AWS_KEY_HERE";
     private final String PASS = "PUT_YOUR_AWS_SECRET_KEY_HERE";
     private final String SNS_TOPIC = "PUT_YOUR_AWS_SNS_TOPIC_URL_HERE";
@@ -48,29 +52,12 @@ public class Main {
     private final ObjectMapper MAPPER = new ObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // These are the closet stores to me. I just checked the network tab on HEB.com when I typed in my zip code
-    // and wrote these down
-    private final Map<String, Instant> storeIds = new HashMap<>() {{
-        put("373", null);
-        put("591", null);
-        put("495", null);
-        put("388", null);
-        put("580", null);
-        put("673", null);
-        put("659", null);
-        put("236", null);
-        put("31", null);
-        put("265", null);
-        put("24", null);
-        put("269", null);
-        put("476", null);
-        put("479", null);
-        put("696", null);
-        put("237", null);
-    }};
+    private final Map<String, Instant> storeIds = new HashMap<>();
 
     private final String HEB_URL_FORMAT =
         "https://www.heb.com/commerce-api/v1/timeslot/timeslots?store_id=%s&days=15&fulfillment_type=pickup";
+
+    private final String STORE_LOCATOR_URL = "https://www.heb.com/commerce-api/v1/store/locator/address";
 
     public static void main(String[] args) {
         new Main().run();
@@ -96,7 +83,7 @@ public class Main {
             try {
                 HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
                 final String body = response.body();
-                Response resp = MAPPER.readValue(body, Response.class);
+                PickupFulfillmentResponse resp = MAPPER.readValue(body, PickupFulfillmentResponse.class);
 
                 return new Pair<>(resp.getPickupStore(), resp.getItems().size());
             } catch (IOException | InterruptedException e) {
@@ -126,6 +113,13 @@ public class Main {
     }
 
     private void run() {
+
+        System.out.println(String.format("Finding stores within %s miles of zip %s", SEARCH_RADIUS_MILES, ZIP));
+
+        Map<String, Instant> stores = locateStores(ZIP).stream()
+                .collect(Collectors.toMap(Store::getId, i -> Instant.EPOCH));
+        storeIds.putAll(stores);
+
         while (true) {
             try {
 
@@ -176,5 +170,30 @@ public class Main {
                 e.printStackTrace();
             }
         }
+    }
+
+    @SneakyThrows // ¯\_(ツ)_/¯
+    private List<Store> locateStores(String zip) {
+
+        StoreLookupRequest storeLookupRequest = new StoreLookupRequest(zip, true, SEARCH_RADIUS_MILES);
+
+        String requestBody = MAPPER
+                .writerWithDefaultPrettyPrinter()
+                .writeValueAsString(storeLookupRequest);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(STORE_LOCATOR_URL))
+                .timeout(Duration.ofSeconds(10))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        final String body = response.body();
+        StoreLookupResponse resp = MAPPER.readValue(body, StoreLookupResponse.class);
+
+        return resp.getStores().stream()
+                .map(StoreDistance::getStore)
+                .collect(Collectors.toList());
     }
 }
